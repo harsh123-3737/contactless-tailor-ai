@@ -22,7 +22,7 @@ List<CameraDescription> cameras = [];
 // backend on the local network.
 const String apiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
-  defaultValue: 'http://10.82.229.227:8000',
+  defaultValue: 'https://fitscan-api-901w.onrender.com/process_frame',
 );
 
 Future<void> main() async {

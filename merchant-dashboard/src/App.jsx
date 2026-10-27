@@ -96,14 +96,16 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
-      const response = await axios.get(API_URL, { timeout: 10000 });
+      // Render free tier can sleep for ~15 minutes; the first request may take
+      // up to a minute while the service cold-starts. Give it a generous window.
+      const response = await axios.get(API_URL, { timeout: 60000 });
       setStats(response.data);
       setLastUpdated(new Date());
     } catch (requestError) {
       setError(
         requestError.response
           ? `The analytics API returned ${requestError.response.status}.`
-          : "Could not reach the analytics API. Check that FastAPI is running on port 8000.",
+          : "Could not reach the analytics API. The server may be waking up from sleep - try again in a moment.",
       );
     } finally {
       setLoading(false);

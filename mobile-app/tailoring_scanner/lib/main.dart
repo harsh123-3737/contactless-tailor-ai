@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'pdf_generator.dart';
@@ -361,8 +362,14 @@ class _DualPreviewScreenState extends State<DualPreviewScreen> {
       if (_showHeightInput && _heightController.text.isNotEmpty) {
         request.fields['height_cm'] = _heightController.text;
       }
-      // 1. Send the multipart request
-      final streamedResponse = await request.send();
+      // 1. Send the multipart request. Render free tier may need up to a
+      // minute to cold-start, so use a generous timeout instead of hanging.
+      final streamedResponse = await request.send().timeout(
+        const Duration(seconds: 60),
+        onTimeout: () => throw TimeoutException(
+          'Server took too long to respond. It may be waking up - try again.',
+        ),
+      );
 
       // 2. Convert the stream into a reusable Response object immediately
       final response = await http.Response.fromStream(streamedResponse);
@@ -424,9 +431,18 @@ class _DualPreviewScreenState extends State<DualPreviewScreen> {
         }
       } catch (e) {
         print("JSON PARSE ERROR: $e");
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Unexpected server response: $e')),
+          );
+        }
       }
     } catch (e) {
       print("Upload error: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+      }
     } finally {
       if (mounted) setState(() => _isUploading = false);
     }

@@ -89,7 +89,7 @@ app = FastAPI(title="AI Tailor Backend")
 # ---> ADD THIS ENTIRE BLOCK <---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000","https://contactless-tailor-ai.vercel.app/"],
+    allow_origins=["http://localhost:3000","https://contactless-tailor-ai.vercel.app","https://contactless-tailor-ai.vercel.app/"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -86,6 +86,14 @@ def get_size_recommendation(measurements: dict) -> dict:
 
 app = FastAPI(title="AI Tailor Backend")
 
+
+@app.get("/health")
+def health_check():
+    """Lightweight endpoint for external keep-alive pings (cron-job.org).
+    Does not touch the database or MediaPipe, so it stays fast.
+    """
+    return {"status": "ok"}
+
 # ---> ADD THIS ENTIRE BLOCK <---
 app.add_middleware(
     CORSMiddleware,

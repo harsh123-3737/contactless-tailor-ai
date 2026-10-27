@@ -92,7 +92,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [lastUpdated, setLastUpdated] = useState(null);
 
-  const loadStats = useCallback(async () => {
+  const loadStats = useCallback(async (isRetry = false) => {
     setLoading(true);
     setError("");
     try {
@@ -102,6 +102,12 @@ export default function App() {
       setStats(response.data);
       setLastUpdated(new Date());
     } catch (requestError) {
+      // One automatic retry: the first attempt often wakes the service up,
+      // so the second attempt usually succeeds even when the first one fails.
+      if (!isRetry) {
+        await loadStats(true);
+        return;
+      }
       setError(
         requestError.response
           ? `The analytics API returned ${requestError.response.status}.`

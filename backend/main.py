@@ -97,7 +97,11 @@ def health_check():
 # ---> ADD THIS ENTIRE BLOCK <---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000","https://contactless-tailor-ai.vercel.app","https://contactless-tailor-m2h5gqgwv-harsh123-3737s-projects.vercel.app"],
+    allow_origins=["http://localhost:3000","https://contactless-tailor-ai.vercel.app"],
+    # Vercel generates a NEW random subdomain for every deployment
+    # (e.g. contactless-tailor-jdup7p7l9-...vercel.app), so exact origins
+    # keep breaking. This regex allows any *.vercel.app origin instead.
+    allow_origin_regex=r"https://[a-z0-9-]+\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

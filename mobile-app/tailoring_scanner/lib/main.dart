@@ -13,8 +13,33 @@ import 'database_helper.dart';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
+
+/// Downscale + JPEG-compress an image so it can be uploaded safely.
+/// Large raw camera frames (~10-15 MB on ResolutionPreset.max) cause the
+/// backend to reset the connection (errno 104). Compressed copies are
+/// typically 300 KB - 1.5 MB, which the server handles fine.
+Future<String> _compressImage(String sourcePath) async {
+  try {
+    final targetPath =
+        '${Directory.systemTemp.path}/scan_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    final result = await FlutterImageCompress.compressAndGetFile(
+      sourcePath,
+      targetPath,
+      quality: 85,
+      // Scale-to-fit: only shrinks larger images, keeps aspect ratio,
+      // plenty of resolution for A4 paper detection and pose landmarks.
+      minWidth: 1600,
+      minHeight: 1600,
+    );
+    return result?.path ?? sourcePath;
+  } catch (e) {
+    print('Compression failed, using original image: $e');
+    return sourcePath;
+  }
+}
 
 List<CameraDescription> cameras = [];
 
@@ -129,7 +154,10 @@ class _CameraScreenState extends State<CameraScreen> {
       return;
     try {
       final XFile imageFile = await _controller.takePicture();
-      _handleImageSelected(imageFile.path);
+      // Raw camera frames are huge and crash the upload connection;
+      // compress before handing off to the preview screen.
+      final compressedPath = await _compressImage(imageFile.path);
+      _handleImageSelected(compressedPath);
     } catch (e) {
       print("Capture error: $e");
     }
@@ -141,7 +169,9 @@ class _CameraScreenState extends State<CameraScreen> {
         source: ImageSource.gallery,
       );
       if (imageFile != null) {
-        _handleImageSelected(imageFile.path);
+        // Same compression pass as camera captures for consistent uploads.
+        final compressedPath = await _compressImage(imageFile.path);
+        _handleImageSelected(compressedPath);
       }
     } catch (e) {
       print("Gallery error: $e");

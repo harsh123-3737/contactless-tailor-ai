@@ -1,3 +1,7 @@
+import 'user_session.dart';
+import 'shop_screen.dart';
+import 'auth_screen.dart';
+
 import 'dart:async';
 import 'dart:io';
 
@@ -48,7 +52,8 @@ List<CameraDescription> cameras = [];
 // backend on the local network.
 const String apiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
-  defaultValue: 'https://fitscan-api-901w.onrender.com',
+  // defaultValue: 'https://fitscan-api-901w.onrender.com',
+  defaultValue: 'http://10.82.229.227:8000/api/scans',
 );
 
 Future<void> main() async {
@@ -61,12 +66,35 @@ Future<void> main() async {
 class TailoringApp extends StatelessWidget {
   const TailoringApp({super.key});
 
+  final String baseUrl =
+      'http://10.186.76.227:8000'; // <-- Ahiya tamaro IPv4 mukjo
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'AI Tailor Scanner',
       theme: ThemeData.dark(),
-      home: const InstructionsScreen(),
+      home: Builder(
+        builder: (context) => AuthScreen(
+          baseUrl: baseUrl,
+          onAuthSuccess: (userId, name, gender, isNewUser) {
+            UserSession.baseUrl = baseUrl;
+            UserSession.userId = userId;
+            UserSession.userName = name;
+            UserSession.gender = gender;
+            if (isNewUser) {
+              // Register pachi direct Body Scan (InstructionsScreen)
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (_) => const InstructionsScreen()),
+              );
+            } else {
+              // Login pachi direct E-Commerce Shop Screen
+              UserSession.goToShop(context);
+            }
+          },
+        ),
+      ),
     );
   }
 }
@@ -191,9 +219,14 @@ class _CameraScreenState extends State<CameraScreen> {
           ? Stack(
               fit: StackFit.expand,
               children: [
+                // 1. પાછળનો લાઈવ કેમેરા
                 CameraPreview(_controller),
-                CustomPaint(painter: SilhouettePainter()),
 
+                // 2. અહીં આપણો નવો પડદો અને સ્માર્ટ બોક્સ આવશે
+                // 2. અહીં આપણો નવો પડદો અને સ્માર્ટ બોક્સ આવશે (માત્ર સ્ટેપ 1 માટે)
+                if (_step == 1) CustomPaint(painter: ScannerOverlayPainter()),
+
+                // 3. તમારું સ્ટેપ બતાવતું ટેક્સ્ટ (Step 1 / Step 2)
                 Positioned(
                   top: 50,
                   left: 20,
@@ -220,6 +253,46 @@ class _CameraScreenState extends State<CameraScreen> {
                   ),
                 ),
 
+                // 4. (નવું) યુઝરને અંતર માટેની સૂચના બતાવવા
+                if (_step == 1)
+                  Positioned(
+                    bottom: 120, // બટનની થોડું ઉપર
+                    left: 0,
+                    right: 0,
+                    child: Column(
+                      children: [
+                        const Text(
+                          "A4 પેપરને આ લીલા બોક્સમાં સેટ કરો",
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.greenAccent.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: Colors.greenAccent),
+                          ),
+                          child: const Text(
+                            "બોક્સ મેચ થશે એટલે 3 મીટર અંતર સેટ થઈ જશે",
+                            style: TextStyle(
+                              color: Colors.greenAccent,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                // 5. તમારા કેમેરા અને ગેલેરીના બટન્સ (જેમ હતા તેમ જ)
                 Positioned(
                   bottom: 30,
                   left: 0,
@@ -379,7 +452,7 @@ class _DualPreviewScreenState extends State<DualPreviewScreen> {
     setState(() => _isUploading = true);
 
     try {
-      var uri = Uri.parse('$apiBaseUrl/upload');
+      var uri = Uri.parse('http://10.186.76.227:8000/upload');
       var request = http.MultipartRequest('POST', uri);
 
       request.files.add(
@@ -411,26 +484,39 @@ class _DualPreviewScreenState extends State<DualPreviewScreen> {
 
       try {
         final Map<String, dynamic> data = jsonDecode(response.body);
+        final measurements = data['measurements'] ?? {};
+        final sizing = data['sizing'] ?? {};
+
+        await UserSession.saveMeasurement(
+          shoulderCm: (measurements['shoulder_width']?['cm'] ?? 0).toDouble(),
+          hipCm: (measurements['hip_width']?['cm'] ?? 0).toDouble(),
+          sleeveCm: (measurements['sleeve_length']?['cm'] ?? 0).toDouble(),
+          legCm: (measurements['leg_length']?['cm'] ?? 0).toDouble(),
+          torsoCm: (measurements['torso_length']?['cm'] ?? 0).toDouble(),
+          recommendedSize: (sizing['recommended_size'] ?? 'M').toString(),
+          calibrationMethod: (data['calibration_method'] ?? 'A4 Paper')
+              .toString(),
+        );
 
         if (response.statusCode == 200) {
           // Persist analytics separately from the measurement request. A
           // dashboard/database outage must not prevent a successful scan.
-          try {
-            await http.post(
-              Uri.parse('$apiBaseUrl/api/scans'),
-              headers: const {'Content-Type': 'application/json'},
-              body: jsonEncode({
-                'customer_name': 'Walk-in customer',
-                'recommended_size':
-                    data['sizing']?['recommended_size'] ?? 'Unknown',
-                'fit_preference': data['sizing']?['fit_type'] ?? 'Regular Fit',
-              }),
-            );
-          } catch (analyticsError) {
-            print(
-              'Analytics save failed; continuing to results: $analyticsError',
-            );
-          }
+          // try {
+          //   await http.post(
+          //     Uri.parse('http://10.82.229.227:8000/api/scans'),
+          //     headers: const {'Content-Type': 'application/json'},
+          //     body: jsonEncode({
+          //       'customer_name': 'Walk-in customer',
+          //       'recommended_size':
+          //           data['sizing']?['recommended_size'] ?? 'Unknown',
+          //       'fit_preference': data['sizing']?['fit_type'] ?? 'Regular Fit',
+          //     }),
+          //   );
+          // } catch (analyticsError) {
+          //   print(
+          //     'Analytics save failed; continuing to results: $analyticsError',
+          //   );
+          // }
           if (mounted) {
             Navigator.pushReplacement(
               context,
@@ -1159,6 +1245,17 @@ class InstructionsScreen extends StatelessWidget {
               );
             },
           ),
+          TextButton(
+            onPressed: () => UserSession.goToShop(context),
+            child: const Text(
+              'Skip',
+              style: TextStyle(
+                color: Colors.indigoAccent,
+                fontWeight: FontWeight.bold,
+                fontSize: 15,
+              ),
+            ),
+          ),
         ],
       ),
       body: SafeArea(
@@ -1368,4 +1465,50 @@ class _ProcessingOverlayState extends State<_ProcessingOverlay> {
       ),
     );
   }
+}
+
+class ScannerOverlayPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    // 1.
+    final backgroundPaint = Paint()..color = Colors.black54;
+
+    // 2.
+    final borderPaint = Paint()
+      ..color = Colors.greenAccent
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.0;
+
+    // 3.
+    double boxWidth = size.width * 0.65;
+    double boxHeight = size.height * 0.40;
+
+    //
+    Rect scanRect = Rect.fromCenter(
+      center: Offset(size.width / 2, size.height / 2.2), // થોડું ઉપર રાખ્યું છે
+      width: boxWidth,
+      height: boxHeight,
+    );
+
+    // 4.
+    Path backgroundPath = Path()
+      ..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
+    Path cutoutPath = Path()..addRect(scanRect);
+    Path finalPath = Path.combine(
+      PathOperation.difference,
+      backgroundPath,
+      cutoutPath,
+    );
+
+    canvas.drawPath(finalPath, backgroundPaint);
+    canvas.drawRect(scanRect, borderPaint);
+
+    canvas.drawCircle(scanRect.topLeft, 5, Paint()..color = Colors.white);
+    canvas.drawCircle(scanRect.topRight, 5, Paint()..color = Colors.white);
+    canvas.drawCircle(scanRect.bottomLeft, 5, Paint()..color = Colors.white);
+    canvas.drawCircle(scanRect.bottomRight, 5, Paint()..color = Colors.white);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

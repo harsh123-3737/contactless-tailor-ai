@@ -1,8 +1,9 @@
-import 'dart:io';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
-import 'database_helper.dart';
+import 'user_session.dart';
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -12,213 +13,167 @@ class HistoryScreen extends StatefulWidget {
 }
 
 class _HistoryScreenState extends State<HistoryScreen> {
-  List<Map<String, dynamic>> _scans = [];
-  bool _isLoading = true;
+  bool isLoading = true;
+  List<dynamic> history = [];
 
   @override
   void initState() {
     super.initState();
-    _loadHistory();
+    _fetchHistory();
   }
 
-  Future<void> _loadHistory() async {
-    setState(() => _isLoading = true);
+  Future<void> _fetchHistory() async {
+    setState(() => isLoading = true);
 
-    // Pull from the database
-    final data = await DatabaseHelper.instance.readAllScans();
+    try {
+      final userId = UserSession.userId;
+      if (userId == null) {
+        setState(() => isLoading = false);
+        return;
+      }
 
-    // DEBUG TRACKER: This will print into your VS Code terminal!
-    print("==== DATABASE CHECK: FETCHED ${data.length} SCANS ====");
+      final url = Uri.parse('${UserSession.baseUrl}/measurements/$userId');
+      final response = await http.get(url);
 
-    setState(() {
-      _scans = data;
-      _isLoading = false;
-    });
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        setState(() {
+          history = data['history'] ?? [];
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('History load nathi thai: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => isLoading = false);
+    }
+  }
+
+  String _formatDate(String? isoDate) {
+    if (isoDate == null || isoDate.isEmpty) return 'Recent Scan';
+    try {
+      // Backend UTC time aape che, etle 'Z' add kari ne phone na local (IST) time ma convert karo
+      final utcString = isoDate.endsWith('Z') ? isoDate : '${isoDate}Z';
+      final dt = DateTime.parse(utcString).toLocal();
+
+      final hour12 = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+      final amPm = dt.hour >= 12 ? 'PM' : 'AM';
+      final minute = dt.minute.toString().padLeft(2, '0');
+      final day = dt.day.toString().padLeft(2, '0');
+      final month = dt.month.toString().padLeft(2, '0');
+
+      return '$day/$month/${dt.year}  •  $hour12:$minute $amPm';
+    } catch (_) {
+      return isoDate;
+    }
+  }
+
+  Widget _metricChip(String label, dynamic value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFF12121A),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Text(
+        '$label: ${value ?? '-'} cm',
+        style: const TextStyle(color: Colors.white70, fontSize: 12),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF121212),
+      backgroundColor: const Color(0xFF12121A),
       appBar: AppBar(
-        title: const Text("Scan History"),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
+        title: const Text('Scan History'),
+        backgroundColor: const Color(0xFF1E1E2C),
         actions: [
-          // NEW REFRESH BUTTON
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed:
-                _loadHistory, // Forces the screen to check the database again
-          ),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _fetchHistory),
         ],
       ),
-      body: _isLoading
+      body: isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : history.isEmpty
           ? const Center(
-              child: CircularProgressIndicator(color: Colors.deepPurpleAccent),
-            )
-          : _scans.isEmpty
-          ? Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 32),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(24),
-                      decoration: BoxDecoration(
-                        color: Colors.deepPurpleAccent.withOpacity(0.1),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.straighten_outlined,
-                        size: 64,
-                        color: Colors.deepPurpleAccent,
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    const Text(
-                      "No Saved Scans Yet",
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      "Capture a photo using the calibration card to view your automated tailoring measurements here.",
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Colors.white54,
-                        fontSize: 14,
-                        height: 1.4,
-                      ),
-                    ),
-                  ],
-                ),
+              child: Text(
+                'Haju sudhi koi body scan save nathi thayu.',
+                style: TextStyle(color: Colors.white60, fontSize: 15),
               ),
             )
           : ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: _scans.length,
+              padding: const EdgeInsets.all(14),
+              itemCount: history.length,
               itemBuilder: (context, index) {
-                final scan = _scans[index];
-                final scanId = scan['scan_id'].toString();
-
-                DateTime date =
-                    DateTime.tryParse(scan['created_at'].toString()) ??
-                    DateTime.now();
-                String formattedDate =
-                    "${date.day}/${date.month}/${date.year} at ${date.hour}:${date.minute.toString().padLeft(2, '0')}";
-
-                return Dismissible(
-                  // The unique key tells Flutter which specific item to slide away
-                  key: Key(scanId),
-                  direction: DismissDirection.endToStart, // Swipe right-to-left
-                  // The red trash can background that reveals underneath
-                  background: Container(
-                    margin: const EdgeInsets.only(bottom: 16),
-                    decoration: BoxDecoration(
-                      color: Colors.redAccent,
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    alignment: Alignment.centerRight,
-                    padding: const EdgeInsets.only(right: 24),
-                    child: const Icon(
-                      Icons.delete_outline,
-                      color: Colors.white,
-                      size: 32,
-                    ),
+                final item = history[index];
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E1E2C),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.white10),
                   ),
-
-                  // The action triggered when the swipe completes
-                  onDismissed: (direction) async {
-                    // 1. Delete from SQLite database
-                    await DatabaseHelper.instance.deleteScan(scanId);
-
-                    // 2. Remove from the screen instantly
-                    setState(() {
-                      _scans.removeAt(index);
-                    });
-
-                    // 3. Show a quick confirmation
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text("Scan deleted"),
-                        backgroundColor: Colors.redAccent,
-                        duration: Duration(seconds: 2),
-                      ),
-                    );
-                  },
-
-                  // Your existing sleek Card UI
-                  child: Card(
-                    color: const Color(0xFF1E1E1E),
-                    margin: const EdgeInsets.only(bottom: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Row(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(12),
-                            child:
-                                scan['image_path'] != 'No Image' &&
-                                    File(scan['image_path']).existsSync()
-                                ? Image.file(
-                                    File(scan['image_path']),
-                                    width: 80,
-                                    height: 100,
-                                    fit: BoxFit.cover,
-                                  )
-                                : Container(
-                                    width: 80,
-                                    height: 100,
-                                    color: Colors.black26,
-                                    child: const Icon(
-                                      Icons.person,
-                                      color: Colors.white24,
-                                    ),
-                                  ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.indigoAccent.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              'Size: ${item['recommended_size'] ?? '-'}',
+                              style: const TextStyle(
+                                color: Colors.indigoAccent,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                              ),
+                            ),
                           ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  formattedDate,
-                                  style: const TextStyle(
-                                    color: Colors.white54,
-                                    fontSize: 14,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  "Size: ${scan['recommended_size']}",
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 22,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  "ID: ${scanId.length > 8 ? scanId.substring(0, 8) : scanId}...",
-                                  style: const TextStyle(
-                                    color: Colors.deepPurpleAccent,
-                                    fontSize: 14,
-                                  ),
-                                ),
-                              ],
+                          Text(
+                            item['calibration_method'] ?? 'A4 Paper',
+                            style: const TextStyle(
+                              color: Colors.greenAccent,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                         ],
                       ),
-                    ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _formatDate(item['created_at']),
+                        style: const TextStyle(
+                          color: Colors.white54,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _metricChip('Shoulder', item['shoulder_cm']),
+                          _metricChip('Hip', item['hip_cm']),
+                          _metricChip('Sleeve', item['sleeve_cm']),
+                          _metricChip('Leg', item['leg_cm']),
+                          _metricChip('Torso', item['torso_cm']),
+                        ],
+                      ),
+                    ],
                   ),
                 );
               },

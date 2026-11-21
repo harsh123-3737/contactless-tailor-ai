@@ -8,30 +8,23 @@ import numpy as np
 import mediapipe as mp
 import math
 import uuid
+import bcrypt  # <-- NEW: Password hashing mate
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi import FastAPI, File, UploadFile, Form
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException  # <-- NEW: Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import DateTime, Integer, String, create_engine, func, select
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy import DateTime, Integer, String, func, select
+from sqlalchemy.orm import Mapped, Session, mapped_column
+
+# <-- NEW: database.py ane models.py mathi import karo
+from database import engine, SessionLocal, Base, get_db
+import models
 
 
-DATABASE_URL = f"sqlite:///{(Path(__file__).resolve().parent / 'analytics.db').as_posix()}"
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False},
-)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
-
-
-class AnalyticsBase(DeclarativeBase):
-    pass
-
-
-class ScanRecord(AnalyticsBase):
+# Tamaro junu ScanRecord table (Base par shift karyu etle badha tables ek j jagya e rahe)
+class ScanRecord(Base):
     __tablename__ = "scan_records"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -43,7 +36,8 @@ class ScanRecord(AnalyticsBase):
     )
 
 
-AnalyticsBase.metadata.create_all(bind=engine)
+# Badha tables (scan_records, users, measurements, products) auto-create thase
+Base.metadata.create_all(bind=engine)
 
 
 class ScanCreate(BaseModel):
@@ -54,6 +48,18 @@ class ScanCreate(BaseModel):
     fit_preference: str = Field(min_length=1, max_length=40)
     timestamp: Optional[datetime] = None
 
+
+# --- NEW: Register & Login Schemas ---
+class UserRegister(BaseModel):
+    name: str
+    email: str
+    password: str
+    gender: str  # "Male" or "Female"
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
 def get_size_recommendation(measurements: dict) -> dict:
     """
     Analyzes raw biometric measurements and outputs a standard clothing size.
@@ -62,13 +68,13 @@ def get_size_recommendation(measurements: dict) -> dict:
     shoulder_cm = measurements.get("shoulder_width", {}).get("cm", 42.0)
     
     # Simple rule-based sizing algorithm
-    if shoulder_cm < 40.0:
+    if shoulder_cm < 41.5:
         size = "S"
         fit_type = "Slim Fit"
-    elif 40.0 <= shoulder_cm < 44.0:
+    elif 41.5 <= shoulder_cm < 44.5:
         size = "M"
         fit_type = "Regular Fit"
-    elif 44.0 <= shoulder_cm < 48.0:
+    elif 44.5 <= shoulder_cm < 48.0:
         size = "L"
         fit_type = "Relaxed Fit"
     else:
@@ -107,7 +113,169 @@ app.add_middleware(
     allow_headers=["*"],
 )
 # -------------------------------
+@app.post("/register")
+def register_user(user: UserRegister, db: Session = Depends(get_db)):
+    existing_user = db.query(models.User).filter(models.User.email == user.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
 
+    hashed_pw = bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+    new_user = models.User(
+        name=user.name,
+        email=user.email,
+        password_hash=hashed_pw,
+        gender=user.gender
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    return {
+        "message": "User registered successfully",
+        "user_id": new_user.id,
+        "name": new_user.name,
+        "gender": new_user.gender
+    }
+
+
+@app.post("/login")
+def login_user(user: UserLogin, db: Session = Depends(get_db)):
+    db_user = db.query(models.User).filter(models.User.email == user.email).first()
+    if not db_user:
+        raise HTTPException(status_code=400, detail="Invalid email or password")
+
+    if not bcrypt.checkpw(user.password.encode('utf-8'), db_user.password_hash.encode('utf-8')):
+        raise HTTPException(status_code=400, detail="Invalid email or password")
+
+    return {
+        "message": "Login successful",
+        "user_id": db_user.id,
+        "name": db_user.name,
+        "email": db_user.email,
+        "gender": db_user.gender
+    }
+
+# ==========================================
+# 3. SAVE & GET MEASUREMENTS (Scan History)
+# ==========================================
+
+class MeasurementCreate(BaseModel):
+    user_id: int
+    shoulder_cm: float
+    hip_cm: float
+    sleeve_cm: float
+    leg_cm: float
+    torso_cm: float
+    recommended_size: str
+    calibration_method: str  # "A4 Paper" or "User Height"
+
+
+@app.post("/measurements")
+def save_measurement(data: MeasurementCreate, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.id == data.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    new_m = models.Measurement(
+        user_id=data.user_id,
+        shoulder_cm=data.shoulder_cm,
+        hip_cm=data.hip_cm,
+        sleeve_cm=data.sleeve_cm,
+        leg_cm=data.leg_cm,
+        torso_cm=data.torso_cm,
+        recommended_size=data.recommended_size,
+        calibration_method=data.calibration_method
+    )
+    db.add(new_m)
+    db.commit()
+    db.refresh(new_m)
+
+    return {"message": "Measurement saved successfully", "measurement_id": new_m.id}
+
+
+@app.get("/measurements/{user_id}")
+def get_user_measurements(user_id: int, db: Session = Depends(get_db)):
+    history = (
+        db.query(models.Measurement)
+        .filter(models.Measurement.user_id == user_id)
+        .order_by(models.Measurement.created_at.desc())
+        .all()
+    )
+    return {"user_id": user_id, "total_scans": len(history), "history": history}
+
+
+# ==========================================
+# 4. AI-FIT PRODUCTS API (Gender + Best Fit)
+# ==========================================
+
+def find_best_fit(user_shoulder_cm: float, size_chart: dict):
+    best_size = None
+    min_diff = float("inf")
+
+    for size_label, dims in size_chart.items():
+        garment_shoulder = dims.get("shoulder_cm", 0)
+        diff = abs(user_shoulder_cm - garment_shoulder)
+        if diff < min_diff:
+            min_diff = diff
+            best_size = size_label
+
+    # Realistic match % (0 cm diff = 99%, 1 cm diff = ~95%)
+    match_percent = max(70, min(99, round(99 - (min_diff * 4))))
+    return best_size, match_percent
+
+
+@app.get("/products/{user_id}")
+def get_ai_fit_products(user_id: int, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # User nu latest saved measurement fetch karo
+    latest_scan = (
+        db.query(models.Measurement)
+        .filter(models.Measurement.user_id == user_id)
+        .order_by(models.Measurement.created_at.desc())
+        .first()
+    )
+
+    # User na gender mujab products filter karo
+    products = (
+        db.query(models.Product)
+        .filter(models.Product.gender.in_([user.gender, "Unisex"]))
+        .all()
+    )
+
+    result = []
+    for p in products:
+        if latest_scan:
+            best_size, match_pct = find_best_fit(latest_scan.shoulder_cm, p.size_chart)
+            fit_badge = f"Best Fit: {best_size} ({match_pct}% Match)"
+        else:
+            best_size = None
+            match_pct = None
+            fit_badge = "Scan body for AI Fit"
+
+        result.append({
+            "id": p.id,
+            "name": p.name,
+            "category": p.category,
+            "gender": p.gender,
+            "price": p.price,
+            "image_url": p.image_url,
+            "available_sizes": list(p.size_chart.keys()),
+            "size_chart": p.size_chart,
+            "ai_recommended_size": best_size,
+            "match_percentage": match_pct,
+            "fit_badge": fit_badge
+        })
+
+    return {
+        "user_name": user.name,
+        "gender": user.gender,
+        "has_scan": latest_scan is not None,
+        "products": result
+    }
 
 @app.post("/api/scans", status_code=201)
 def create_scan(scan: ScanCreate):
@@ -354,7 +522,7 @@ async def upload_two_step(
             calibration_method = "User Height"
             nose = pts[0]
             mid_ankle = ((pts[27][0] + pts[28][0]) / 2, (pts[27][1] + pts[28][1]) / 2)
-            pixel_height = calculate_distance(nose, mid_ankle) * 1.08
+            pixel_height = calculate_distance(nose, mid_ankle) * 1.25
             ppc = pixel_height / height_cm
 
         # 4. Draw pose skeleton
@@ -364,8 +532,11 @@ async def upload_two_step(
             if start in pts and end in pts:
                 cv2.line(img_body, pts[start], pts[end], (0, 255, 0), 2)
 
+        calib_multiplier = 1.18 if calibration_method == "A4 Paper (Step 1)" else 1.0
+
         def to_units(px):
-            val_cm = px / ppc
+            # Ahiya calibration multiplier (1.18) add karyo che
+            val_cm = (px / ppc) * calib_multiplier 
             return {"cm": round(val_cm, 1), "in": round(val_cm / 2.54, 1)}
 
        # Base pixel distances (Raw Skeleton)

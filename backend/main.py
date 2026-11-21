@@ -188,9 +188,17 @@ def save_measurement(data: MeasurementCreate, db: Session = Depends(get_db)):
         calibration_method=data.calibration_method
     )
     db.add(new_m)
+
+    # Analytics Dashboard (Vercel) mate ScanRecord ma auto-save
+    new_scan_log = ScanRecord(
+        customer_name=user.name,
+        recommended_size=data.recommended_size or "M",
+        fit_preference="Regular Fit",
+    )
+    db.add(new_scan_log)
+
     db.commit()
     db.refresh(new_m)
-
     return {"message": "Measurement saved successfully", "measurement_id": new_m.id}
 
 

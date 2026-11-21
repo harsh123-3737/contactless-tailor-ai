@@ -302,6 +302,33 @@ def create_scan(scan: ScanCreate):
             "timestamp": record.timestamp,
         }
 
+@app.get("/api/scans")
+def get_analytics_scans(db: Session = Depends(get_db)):
+    # Nava measurements table mathi latest scans fetch karo (User sathe join kari ne)
+    records = (
+        db.query(models.Measurement, models.User)
+        .join(models.User, models.Measurement.user_id == models.User.id)
+        .order_by(models.Measurement.id.desc())
+        .all()
+    )
+
+    scans = []
+    for m, u in records:
+        scans.append({
+            "id": m.id,
+            "customer_name": u.name,
+            "gender": u.gender,
+            "recommended_size": m.recommended_size or "M",
+            "fit_preference": "Regular Fit",
+            "shoulder_cm": m.shoulder_cm,
+            "hip_cm": m.hip_cm,
+            "sleeve_cm": m.sleeve_cm,
+            "leg_cm": m.leg_cm,
+            "torso_cm": m.torso_cm,
+            "created_at": m.created_at.isoformat() if m.created_at else "",
+        })
+
+    return scans
 
 @app.get("/api/dashboard/stats")
 def get_dashboard_stats():

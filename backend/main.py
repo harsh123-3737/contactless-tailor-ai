@@ -17,11 +17,11 @@ from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException  # <
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import DateTime, Integer, String, func, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
-
+from seed_products import seed_data
 # <-- NEW: database.py ane models.py mathi import karo
 from database import engine, SessionLocal, Base, get_db
 import models
-
+ # Call the seed_data function to populate the database
 
 # Tamaro junu ScanRecord table (Base par shift karyu etle badha tables ek j jagya e rahe)
 class ScanRecord(Base):
@@ -38,7 +38,8 @@ class ScanRecord(Base):
 
 # Badha tables (scan_records, users, measurements, products) auto-create thase
 Base.metadata.create_all(bind=engine)
-
+models.Base.metadata.create_all(bind=engine)
+seed_data()  # Render par database empty hoy to automatic clothes add kari dese
 
 class ScanCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
